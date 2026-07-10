@@ -10,6 +10,13 @@ GT911 touch panel.
 
 ![Big Plane Radar running on Waveshare ESP32-S3-Touch-LCD-7](docs/plane-radar.png)
 
+## 3D-Printed Stand
+
+A matching desktop stand for this display and firmware is available on
+MakerWorld:
+
+https://makerworld.com/ru/models/3034679-stand-for-esp32-s3-touch-lcd-7-for-plane-radar
+
 ## Hardware
 
 - Waveshare ESP32-S3-Touch-LCD-7, 800x480 RGB LCD

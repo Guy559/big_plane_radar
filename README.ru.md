@@ -10,6 +10,12 @@
 
 ![Big Plane Radar на Waveshare ESP32-S3-Touch-LCD-7](docs/plane-radar.png)
 
+## 3D-печатный стенд
+
+Подходящий настольный стенд для этого дисплея и прошивки доступен на MakerWorld:
+
+https://makerworld.com/ru/models/3034679-stand-for-esp32-s3-touch-lcd-7-for-plane-radar
+
 ## Железо
 
 - Waveshare ESP32-S3-Touch-LCD-7, RGB LCD 800x480
