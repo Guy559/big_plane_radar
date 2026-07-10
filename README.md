@@ -139,8 +139,7 @@ file manually:
    - file: `releases/big_plane_radar.ino.merged.bin`
 5. Click `Erase`, then `Program`.
 
-Use the merged binary for browser flashing. The separate `bootloader`,
-`partitions`, `boot_app0`, and app binaries are mainly for command-line flashing.
+Use the merged binary for browser flashing.
 
 ### Option B: ESP Web Tools Page
 
@@ -214,12 +213,13 @@ curl -o docs/screenshot.bmp http://<device-ip>/screenshot.bmp
 
 Prebuilt files are placed in `releases/`:
 
-- `big_plane_radar.ino.bin`
-- `big_plane_radar.ino.bootloader.bin`
-- `big_plane_radar.ino.partitions.bin`
 - `big_plane_radar.ino.merged.bin`
-- `boot_app0.bin`
-- `flash_args`
 
-Manual flashing can be done with `esptool` using the offsets from `flash_args`.
-The easiest supported path is still `UPLOAD=1 ... bash build_arduino_cli.sh`.
+Manual flashing can use the same merged binary:
+
+```sh
+esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
+  write_flash 0x0 releases/big_plane_radar.ino.merged.bin
+```
+
+The easiest development path is still `UPLOAD=1 ... bash build_arduino_cli.sh`.

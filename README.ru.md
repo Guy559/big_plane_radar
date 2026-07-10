@@ -141,9 +141,7 @@ PORT=/dev/ttyUSB0
    - file: `releases/big_plane_radar.ino.merged.bin`
 5. Нажмите `Erase`, затем `Program`.
 
-Для браузерной прошивки используйте именно merged binary. Отдельные файлы
-`bootloader`, `partitions`, `boot_app0` и app binary в первую очередь нужны для
-прошивки через командную строку.
+Для браузерной прошивки используйте именно merged binary.
 
 ### Вариант B: ESP Web Tools page
 
@@ -217,12 +215,13 @@ curl -o docs/screenshot.bmp http://<device-ip>/screenshot.bmp
 
 Готовые файлы сборки лежат в `releases/`:
 
-- `big_plane_radar.ino.bin`
-- `big_plane_radar.ino.bootloader.bin`
-- `big_plane_radar.ino.partitions.bin`
 - `big_plane_radar.ino.merged.bin`
-- `boot_app0.bin`
-- `flash_args`
 
-Вручную прошивать можно через `esptool`, используя offsets из `flash_args`.
-Самый простой поддерживаемый способ — `UPLOAD=1 ... bash build_arduino_cli.sh`.
+Вручную прошивать можно тем же merged binary:
+
+```sh
+esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
+  write_flash 0x0 releases/big_plane_radar.ino.merged.bin
+```
+
+Самый простой способ для разработки — `UPLOAD=1 ... bash build_arduino_cli.sh`.
