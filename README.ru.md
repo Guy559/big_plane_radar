@@ -40,6 +40,8 @@ https://makerworld.com/ru/models/3034679-stand-for-esp32-s3-touch-lcd-7-for-plan
 - фоновый реконнект к Wi-Fi после отключений питания или позднего старта роутера;
 - управление тачем: короткий тап меняет дальность, длинное нажатие открывает
   setup portal;
+- boot setup window: удержание экрана во время запуска принудительно открывает
+  setup portal;
 - endpoint для скриншота: `/screenshot` и `/screenshot.bmp`;
 - консервативные настройки RGB LCD для этой панели: PCLK `14 MHz` и RGB bounce
   buffer `800 * 10`.

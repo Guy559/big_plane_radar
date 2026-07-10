@@ -38,6 +38,7 @@ appears as `/dev/ttyACM*` or `/dev/ttyUSB*`; the user may need access to the
   `https://api.adsbdb.com/`;
 - background Wi-Fi reconnect after router/power outages;
 - touch controls: short tap cycles range, long press starts the setup portal;
+- boot setup window: hold the screen during startup to force the setup portal;
 - screenshot endpoint: `/screenshot` and `/screenshot.bmp`;
 - conservative RGB LCD settings for this panel: `14 MHz` PCLK and `800 * 10`
   RGB bounce buffer.

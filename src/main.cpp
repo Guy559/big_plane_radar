@@ -48,6 +48,7 @@ static constexpr uint32_t ROUTE_LOOKUP_INTERVAL_MS = 5000;
 static constexpr uint32_t ROUTE_LOOKUP_RETRY_MS = 600000;
 static constexpr uint32_t ROUTE_CACHE_STALE_MS = 60000;
 static constexpr uint32_t ROUTE_HTTP_TIMEOUT_MS = 2500;
+static constexpr uint32_t BOOT_SETUP_WINDOW_MS = 4000;
 static constexpr uint32_t TOUCH_LONG_PRESS_MS = 1200;
 static constexpr uint32_t TOUCH_TAP_MIN_MS = 50;
 static constexpr uint32_t CONFIG_HOLD_NOTICE_MS = 900;
@@ -305,6 +306,59 @@ static void setBootStage(BootStageId id, BootStatus status) {
     if (bootScreenActive) {
         drawBootScreen();
     }
+}
+
+static void drawBootSetupHint(const char *text, uint16_t color) {
+    uint16_t bootBg = screen.color565(1, 6, 5);
+    screen.fillRect(54, 436, 420, 26, bootBg);
+    screen.setTextDatum(textdatum_t::top_left);
+    screen.setTextSize(1);
+    screen.setTextColor(color, bootBg);
+    screen.drawString(text, 54, 444);
+    screen.present();
+}
+
+static void startPortal();
+
+static bool waitForBootSetupHold(uint32_t windowMs) {
+    uint32_t start = millis();
+    uint32_t pressStart = 0;
+    bool wasDown = false;
+    bool hintChanged = false;
+    uint16_t bootDim = screen.color565(95, 165, 125);
+    uint16_t bootWarn = screen.color565(255, 220, 70);
+    drawBootSetupHint("HOLD SCREEN FOR SETUP", bootDim);
+
+    while (millis() - start < windowMs) {
+        server.handleClient();
+        uint16_t x = 0;
+        uint16_t y = 0;
+        bool down = screen.readTouch(&x, &y);
+        uint32_t now = millis();
+
+        if (down && !wasDown) {
+            pressStart = now;
+            hintChanged = false;
+        }
+        if (down && !hintChanged && now - pressStart >= CONFIG_HOLD_NOTICE_MS) {
+            hintChanged = true;
+            drawBootSetupHint("KEEP HOLDING FOR SETUP", bootWarn);
+        }
+        if (down && now - pressStart >= TOUCH_LONG_PRESS_MS) {
+            startPortal();
+            touchWasDown = true;
+            longPressHandled = true;
+            configNoticeShown = false;
+            return true;
+        }
+        wasDown = down;
+        delay(20);
+    }
+
+    touchWasDown = false;
+    longPressHandled = false;
+    configNoticeShown = false;
+    return false;
 }
 
 static String htmlEscape(const String &input) {
@@ -1303,8 +1357,18 @@ void setup() {
     }
     setBootStage(BOOT_INTERFACE, BootStatus::Running);
     setBootStage(BOOT_INTERFACE, BootStatus::Ok);
-    delay(350);
+
+    bool setupMode = portalActive;
+    if (!setupMode) {
+        setupMode = waitForBootSetupHold(BOOT_SETUP_WINDOW_MS);
+    }
     bootScreenActive = false;
+    if (setupMode || portalActive) {
+        logStep("setup portal active");
+        drawStatusScreen("PLANE RADAR SETUP", "Connect to Wi-Fi AP: PlaneRadar-Setup\nOpen http://192.168.4.1\nSet Wi-Fi and radar location.");
+        return;
+    }
+
     logStep("drawRadar begin");
     drawRadar();
     logStep("drawRadar end");
