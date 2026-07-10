@@ -33,6 +33,10 @@ https://makerworld.com/ru/models/3034679-stand-for-esp32-s3-touch-lcd-7-for-plan
 - сохранение Wi-Fi, центра радара, единиц измерения, отображения ВПП и дальности
   в NVS;
 - данные ADS-B из `https://opendata.adsb.fi/api/v3/`;
+- локальное предсказание позиции между ADS-B обновлениями с отрисовкой примерно
+  `4 FPS`;
+- опциональная строка маршрута город-город в правом списке через кэшируемые
+  callsign-запросы к `https://api.adsbdb.com/`;
 - фоновый реконнект к Wi-Fi после отключений питания или позднего старта роутера;
 - управление тачем: короткий тап меняет дальность, длинное нажатие открывает
   setup portal;
@@ -51,8 +55,10 @@ https://makerworld.com/ru/models/3034679-stand-for-esp32-s3-touch-lcd-7-for-plan
 │   └── ArduinoJson/
 ├── releases/
 ├── scripts/
+│   └── build_iata_airports.py
 ├── src/
 │   ├── airports.h
+│   ├── airports_iata.h
 │   ├── main.cpp
 │   ├── panel_display.cpp
 │   └── panel_display.h

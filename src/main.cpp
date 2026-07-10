@@ -7,10 +7,12 @@
 #include <WiFiClientSecure.h>
 #include <ESPmDNS.h>
 #include <algorithm>
+#include <ctype.h>
 #include <esp_heap_caps.h>
 #include <math.h>
 
 #include "airports.h"
+#include "airports_iata.h"
 #include "panel_display.h"
 
 #ifndef DEFAULT_WIFI_SSID
@@ -36,16 +38,23 @@ static constexpr int PANEL_PAD = 10;
 static constexpr int PANEL_TEXT_X = PANEL_X + 42;
 static constexpr int PANEL_RIGHT = SCREEN_W - 10;
 static constexpr int PANEL_LIST_TOP = 42;
-static constexpr int PANEL_ROW_H = 42;
+static constexpr int PANEL_ROW_H = 54;
 static constexpr uint32_t WIFI_CONNECT_ATTEMPT_MS = 15000;
 static constexpr uint32_t WIFI_RECONNECT_INTERVAL_MS = 12000;
 static constexpr uint32_t ADSB_FETCH_INTERVAL_MS = 5000;
+static constexpr uint32_t RADAR_DRAW_INTERVAL_MS = 250;
+static constexpr uint32_t AIRCRAFT_EXTRAPOLATE_MAX_MS = 30000;
+static constexpr uint32_t ROUTE_LOOKUP_INTERVAL_MS = 5000;
+static constexpr uint32_t ROUTE_LOOKUP_RETRY_MS = 600000;
+static constexpr uint32_t ROUTE_CACHE_STALE_MS = 60000;
+static constexpr uint32_t ROUTE_HTTP_TIMEOUT_MS = 2500;
 static constexpr uint32_t TOUCH_LONG_PRESS_MS = 1200;
 static constexpr uint32_t TOUCH_TAP_MIN_MS = 50;
 static constexpr uint32_t CONFIG_HOLD_NOTICE_MS = 900;
 static constexpr float KM_PER_NM = 1.852f;
 static constexpr float KM_PER_DEG = 111.0f;
 static constexpr size_t MAX_AIRCRAFT = 64;
+static constexpr size_t MAX_ROUTE_CACHE = 40;
 
 static auto &screen = PanelDisplay::screen;
 static WebServer server(80);
@@ -73,13 +82,29 @@ struct Aircraft {
     char alt[14] = {};
     char vsi[12] = {};
     float distanceKm = 0;
+    float renderLat = 0;
+    float renderLon = 0;
     int screenX = 0;
     int screenY = 0;
+    uint32_t positionMs = 0;
     bool inside = false;
+    bool hasFlight = false;
+};
+
+struct RouteCacheEntry {
+    char callsign[10] = {};
+    char originIata[4] = {};
+    char destinationIata[4] = {};
+    uint32_t lastSeenMs = 0;
+    uint32_t lastLookupMs = 0;
+    bool active = false;
+    bool hasRoute = false;
+    bool lookupDone = false;
 };
 
 static AppConfig config;
 static Aircraft aircraft[MAX_AIRCRAFT];
+static RouteCacheEntry routeCache[MAX_ROUTE_CACHE];
 static size_t aircraftCount = 0;
 static String statusText = "BOOT";
 static String lastFetchText = "NO DATA";
@@ -88,6 +113,7 @@ static bool mdnsStarted = false;
 static uint32_t lastReconnectMs = 0;
 static uint32_t lastFetchMs = 0;
 static uint32_t lastDrawMs = 0;
+static uint32_t lastRouteLookupMs = 0;
 static bool touchWasDown = false;
 static uint32_t touchDownMs = 0;
 static bool longPressHandled = false;
@@ -578,6 +604,214 @@ static void copyJsonStringTrimmed(const JsonObject &obj, const char *key, char *
     out[n] = '\0';
 }
 
+static bool normalizeCallsign(const char *input, char *out, size_t outLen) {
+    if (outLen == 0) return false;
+    out[0] = '\0';
+    if (input == nullptr) return false;
+
+    size_t len = 0;
+    bool hasAlpha = false;
+    for (size_t i = 0; input[i] != '\0' && len + 1 < outLen; i++) {
+        unsigned char c = static_cast<unsigned char>(input[i]);
+        if (!isalnum(c)) continue;
+        char normalized = static_cast<char>(toupper(c));
+        if (isalpha(static_cast<unsigned char>(normalized))) {
+            hasAlpha = true;
+        }
+        out[len++] = normalized;
+    }
+    out[len] = '\0';
+    return len >= 3 && hasAlpha;
+}
+
+static bool copyIataCode(const JsonObject &obj, const char *key, char *out, size_t outLen) {
+    if (outLen < 4) return false;
+    out[0] = '\0';
+    if (!obj[key].is<const char *>()) return false;
+    const char *value = obj[key].as<const char *>();
+    size_t len = 0;
+    for (size_t i = 0; value[i] != '\0' && len < 3; i++) {
+        unsigned char c = static_cast<unsigned char>(value[i]);
+        if (!isalpha(c)) continue;
+        out[len++] = static_cast<char>(toupper(c));
+    }
+    out[len] = '\0';
+    return len == 3;
+}
+
+static bool copyAirportIata(const JsonObject &airport, char *out, size_t outLen) {
+    return copyIataCode(airport, "iata_code", out, outLen) ||
+           copyIataCode(airport, "iata", out, outLen) ||
+           copyIataCode(airport, "iataCode", out, outLen);
+}
+
+static const char *cityForIata(const char *iata) {
+    if (iata == nullptr || strlen(iata) != 3) return nullptr;
+    for (size_t i = 0; i < kIataAirportCityCount; i++) {
+        if (strcmp(kIataAirportCities[i].iata, iata) == 0) {
+            return kIataAirportCities[i].city;
+        }
+    }
+    return nullptr;
+}
+
+static RouteCacheEntry *findRouteCacheEntry(const char *callsign) {
+    for (size_t i = 0; i < MAX_ROUTE_CACHE; i++) {
+        if (routeCache[i].active && strcmp(routeCache[i].callsign, callsign) == 0) {
+            return &routeCache[i];
+        }
+    }
+    return nullptr;
+}
+
+static RouteCacheEntry *oldestRouteCacheEntry() {
+    RouteCacheEntry *oldest = &routeCache[0];
+    for (size_t i = 1; i < MAX_ROUTE_CACHE; i++) {
+        if (!routeCache[i].active) {
+            return &routeCache[i];
+        }
+        if (routeCache[i].lastSeenMs < oldest->lastSeenMs) {
+            oldest = &routeCache[i];
+        }
+    }
+    return oldest;
+}
+
+static RouteCacheEntry *touchRouteCacheEntry(const char *callsign, uint32_t now) {
+    char normalized[10];
+    if (!normalizeCallsign(callsign, normalized, sizeof(normalized))) {
+        return nullptr;
+    }
+
+    RouteCacheEntry *entry = findRouteCacheEntry(normalized);
+    if (entry == nullptr) {
+        entry = oldestRouteCacheEntry();
+        *entry = RouteCacheEntry();
+        strlcpy(entry->callsign, normalized, sizeof(entry->callsign));
+        entry->active = true;
+    }
+    entry->lastSeenMs = now;
+    return entry;
+}
+
+static void pruneRouteCache(uint32_t now) {
+    for (size_t i = 0; i < MAX_ROUTE_CACHE; i++) {
+        if (routeCache[i].active && now - routeCache[i].lastSeenMs > ROUTE_CACHE_STALE_MS) {
+            routeCache[i] = RouteCacheEntry();
+        }
+    }
+}
+
+static void syncRouteCacheFromAircraft(uint32_t now) {
+    for (size_t i = 0; i < aircraftCount; i++) {
+        if (aircraft[i].hasFlight) {
+            touchRouteCacheEntry(aircraft[i].callsign, now);
+        }
+    }
+
+    pruneRouteCache(now);
+}
+
+static bool lookupRouteForCallsign(RouteCacheEntry &entry) {
+    String url = "https://api.adsbdb.com/v0/callsign/";
+    url += entry.callsign;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    if (!http.begin(client, url)) {
+        return false;
+    }
+    http.setTimeout(ROUTE_HTTP_TIMEOUT_MS);
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        http.end();
+        return false;
+    }
+
+    String payload = http.getString();
+    http.end();
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (err) {
+        return false;
+    }
+
+    JsonObject route = doc["response"]["flightroute"].as<JsonObject>();
+    if (route.isNull()) {
+        return false;
+    }
+
+    char origin[4] = {};
+    char destination[4] = {};
+    if (!copyAirportIata(route["origin"].as<JsonObject>(), origin, sizeof(origin)) ||
+        !copyAirportIata(route["destination"].as<JsonObject>(), destination, sizeof(destination))) {
+        return false;
+    }
+
+    strlcpy(entry.originIata, origin, sizeof(entry.originIata));
+    strlcpy(entry.destinationIata, destination, sizeof(entry.destinationIata));
+    entry.hasRoute = true;
+    return true;
+}
+
+static bool serviceRouteLookup() {
+    if (WiFi.status() != WL_CONNECTED || aircraftCount == 0) {
+        return false;
+    }
+
+    uint32_t now = millis();
+    if (now - lastRouteLookupMs < ROUTE_LOOKUP_INTERVAL_MS) {
+        return false;
+    }
+
+    for (size_t i = 0; i < MAX_ROUTE_CACHE; i++) {
+        RouteCacheEntry &entry = routeCache[i];
+        if (!entry.active || entry.hasRoute) continue;
+        if (now - entry.lastSeenMs > ROUTE_CACHE_STALE_MS) continue;
+        if (entry.lookupDone && now - entry.lastLookupMs < ROUTE_LOOKUP_RETRY_MS) continue;
+
+        lastRouteLookupMs = now;
+        entry.lastLookupMs = now;
+        entry.lookupDone = true;
+        bool ok = lookupRouteForCallsign(entry);
+        Serial.printf("[route] callsign=%s ok=%d origin=%s destination=%s\n",
+                      entry.callsign,
+                      ok ? 1 : 0,
+                      entry.originIata,
+                      entry.destinationIata);
+        Serial.flush();
+        return ok;
+    }
+
+    return false;
+}
+
+template <typename Gfx>
+static String routeLabelForCallsign(Gfx &g, const char *callsign, int maxWidth) {
+    char normalized[10];
+    if (!normalizeCallsign(callsign, normalized, sizeof(normalized))) {
+        return "";
+    }
+
+    RouteCacheEntry *entry = findRouteCacheEntry(normalized);
+    if (entry == nullptr || !entry->hasRoute) {
+        return "";
+    }
+
+    const char *originCity = cityForIata(entry->originIata);
+    const char *destinationCity = cityForIata(entry->destinationIata);
+    String route = String(originCity != nullptr ? originCity : entry->originIata) +
+                   " - " +
+                   String(destinationCity != nullptr ? destinationCity : entry->destinationIata);
+
+    if (g.textWidth(route) <= maxWidth) {
+        return route;
+    }
+    return String(entry->originIata) + " - " + entry->destinationIata;
+}
+
 static void formatAltitude(const JsonObject &plane, char *out, size_t outLen) {
     if (outLen == 0) return;
     out[0] = '\0';
@@ -648,7 +882,9 @@ static bool fetchAdsb() {
 
     JsonArray ac = doc["ac"].as<JsonArray>();
     aircraftCount = 0;
+    uint32_t fetchNow = millis();
     if (ac.isNull()) {
+        syncRouteCacheFromAircraft(fetchNow);
         lastFetchText = "0 AIRCRAFT";
         return true;
     }
@@ -659,14 +895,19 @@ static bool fetchAdsb() {
         if (isGroundAircraft(plane)) continue;
 
         Aircraft &dst = aircraft[aircraftCount];
+        dst = Aircraft();
         dst.lat = plane["lat"].as<float>();
         dst.lon = plane["lon"].as<float>();
+        dst.renderLat = dst.lat;
+        dst.renderLon = dst.lon;
+        dst.positionMs = fetchNow;
         dst.noseDeg = pickHeading(plane, false);
         dst.trackDeg = pickHeading(plane, true);
         dst.gsKnots = pickSpeed(plane);
         dst.verticalRateFpm = pickVerticalRate(plane);
         copyJsonStringTrimmed(plane, "flight", dst.callsign, sizeof(dst.callsign));
-        if (dst.callsign[0] == '\0') {
+        dst.hasFlight = dst.callsign[0] != '\0';
+        if (!dst.hasFlight) {
             copyJsonStringTrimmed(plane, "hex", dst.callsign, sizeof(dst.callsign));
         }
         copyJsonStringTrimmed(plane, "t", dst.type, sizeof(dst.type));
@@ -675,6 +916,7 @@ static bool fetchAdsb() {
         aircraftCount++;
     }
 
+    syncRouteCacheFromAircraft(fetchNow);
     lastFetchText = String(aircraftCount) + " AIRCRAFT";
     Serial.println("[adsb] " + lastFetchText);
     return true;
@@ -697,11 +939,39 @@ static bool toRadarPoint(float lat, float lon, int &x, int &y, float &distKm) {
     return distKm <= activeOuterKm();
 }
 
+static void extrapolatedPosition(const Aircraft &item, uint32_t now, float &lat, float &lon) {
+    lat = item.lat;
+    lon = item.lon;
+    if (item.positionMs == 0 || item.gsKnots < 1.0f) {
+        return;
+    }
+
+    uint32_t ageMs = now - item.positionMs;
+    if (ageMs > AIRCRAFT_EXTRAPOLATE_MAX_MS) {
+        ageMs = AIRCRAFT_EXTRAPOLATE_MAX_MS;
+    }
+
+    float distanceKm = item.gsKnots * KM_PER_NM * (static_cast<float>(ageMs) / 3600000.0f);
+    if (distanceKm < 0.001f) {
+        return;
+    }
+
+    float trackRad = item.trackDeg * DEG_TO_RAD;
+    float northKm = cosf(trackRad) * distanceKm;
+    float eastKm = sinf(trackRad) * distanceKm;
+    float lonScale = KM_PER_DEG * std::max(0.1f, fabsf(cosf(item.lat * DEG_TO_RAD)));
+
+    lat = item.lat + northKm / KM_PER_DEG;
+    lon = item.lon + eastKm / lonScale;
+}
+
 static void prepareAircraftGeometry() {
+    uint32_t now = millis();
     for (size_t i = 0; i < aircraftCount; i++) {
+        extrapolatedPosition(aircraft[i], now, aircraft[i].renderLat, aircraft[i].renderLon);
         aircraft[i].inside = toRadarPoint(
-            aircraft[i].lat,
-            aircraft[i].lon,
+            aircraft[i].renderLat,
+            aircraft[i].renderLon,
             aircraft[i].screenX,
             aircraft[i].screenY,
             aircraft[i].distanceKm
@@ -777,7 +1047,7 @@ static void drawAircraftList(Gfx &g) {
         const Aircraft &item = aircraft[idx];
         int rowY = PANEL_LIST_TOP + drawn * PANEL_ROW_H;
         int iconX = PANEL_X + 20;
-        int iconY = rowY + 18;
+        int iconY = rowY + 23;
 
         drawPlane(g, iconX, iconY, item.noseDeg);
 
@@ -796,6 +1066,12 @@ static void drawAircraftList(Gfx &g) {
         g.setTextColor(colorDim, colorBg);
         g.drawString(detail, PANEL_TEXT_X, rowY + 20);
 
+        String route = routeLabelForCallsign(g, item.callsign, textWidth);
+        if (route.length() > 0) {
+            g.setTextColor(colorRunway, colorBg);
+            g.drawString(route, PANEL_TEXT_X, rowY + 32);
+        }
+
         g.drawWideLine(PANEL_X + PANEL_PAD, rowY + PANEL_ROW_H - 4, PANEL_RIGHT, rowY + PANEL_ROW_H - 4, 1.0f, colorGrid);
         drawn++;
     }
@@ -811,15 +1087,18 @@ static void drawAircraftList(Gfx &g) {
 static void drawRadar() {
     static uint32_t drawCounter = 0;
     drawCounter++;
-    Serial.printf("[draw] #%lu begin aircraft=%u wifi=%d w=%d h=%d free_heap=%u free_psram=%u\n",
-                  static_cast<unsigned long>(drawCounter),
-                  static_cast<unsigned>(aircraftCount),
-                  WiFi.status(),
-                  screen.width(),
-                  screen.height(),
-                  static_cast<unsigned>(ESP.getFreeHeap()),
-                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
-    Serial.flush();
+    bool logDraw = drawCounter <= 3 || drawCounter % 20 == 0;
+    if (logDraw) {
+        Serial.printf("[draw] #%lu begin aircraft=%u wifi=%d w=%d h=%d free_heap=%u free_psram=%u\n",
+                      static_cast<unsigned long>(drawCounter),
+                      static_cast<unsigned>(aircraftCount),
+                      WiFi.status(),
+                      screen.width(),
+                      screen.height(),
+                      static_cast<unsigned>(ESP.getFreeHeap()),
+                      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+        Serial.flush();
+    }
     auto &g = screen;
     g.startWrite();
     g.fillScreen(colorBg);
@@ -858,7 +1137,7 @@ static void drawRadar() {
             float dxKm = 0;
             float dyKm = 0;
             float distKm = 0;
-            offsetKm(aircraft[i].lat, aircraft[i].lon, dxKm, dyKm, distKm);
+            offsetKm(aircraft[i].renderLat, aircraft[i].renderLon, dxKm, dyKm, distKm);
             if (distKm < 0.01f) continue;
             float ang = atan2f(dxKm, dyKm);
             x = cx + lroundf(sinf(ang) * (radius + 12));
@@ -898,10 +1177,12 @@ static void drawRadar() {
     g.endWrite();
     g.present();
     lastDrawMs = millis();
-    Serial.printf("[draw] #%lu end at=%lu\n",
-                  static_cast<unsigned long>(drawCounter),
-                  static_cast<unsigned long>(lastDrawMs));
-    Serial.flush();
+    if (logDraw) {
+        Serial.printf("[draw] #%lu end at=%lu\n",
+                      static_cast<unsigned long>(drawCounter),
+                      static_cast<unsigned long>(lastDrawMs));
+        Serial.flush();
+    }
 }
 
 static void handleTouch() {
@@ -1034,6 +1315,7 @@ void loop() {
     handleTouch();
 
     uint32_t now = millis();
+    pruneRouteCache(now);
     if (WiFi.status() != WL_CONNECTED && config.configured && now - lastReconnectMs >= WIFI_RECONNECT_INTERVAL_MS) {
         lastReconnectMs = now;
         setStatus("WIFI RECONNECT");
@@ -1050,7 +1332,11 @@ void loop() {
         }
     }
 
-    if (now - lastDrawMs > 30000) {
+    if (WiFi.status() == WL_CONNECTED && serviceRouteLookup()) {
+        drawRadar();
+    }
+
+    if (aircraftCount > 0 && now - lastDrawMs >= RADAR_DRAW_INTERVAL_MS) {
         drawRadar();
     }
     delay(10);

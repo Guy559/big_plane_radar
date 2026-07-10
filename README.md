@@ -33,6 +33,9 @@ appears as `/dev/ttyACM*` or `/dev/ttyUSB*`; the user may need access to the
 - first-boot setup portal: `PlaneRadar-Setup`;
 - saved Wi-Fi, radar center, units, runway overlay, and range settings in NVS;
 - ADS-B data from `https://opendata.adsb.fi/api/v3/`;
+- local dead-reckoning between ADS-B updates, redrawn at about `4 FPS`;
+- optional route city line in the aircraft list via cached callsign lookups from
+  `https://api.adsbdb.com/`;
 - background Wi-Fi reconnect after router/power outages;
 - touch controls: short tap cycles range, long press starts the setup portal;
 - screenshot endpoint: `/screenshot` and `/screenshot.bmp`;
@@ -50,8 +53,10 @@ appears as `/dev/ttyACM*` or `/dev/ttyUSB*`; the user may need access to the
 │   └── ArduinoJson/
 ├── releases/
 ├── scripts/
+│   └── build_iata_airports.py
 ├── src/
 │   ├── airports.h
+│   ├── airports_iata.h
 │   ├── main.cpp
 │   ├── panel_display.cpp
 │   └── panel_display.h
