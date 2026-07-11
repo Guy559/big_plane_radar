@@ -81,6 +81,7 @@ struct Aircraft {
     char callsign[10] = {};
     char type[8] = {};
     char category[4] = {};
+    char squawk[5] = {};
     char alt[14] = {};
     char vsi[12] = {};
     float distanceKm = 0;
@@ -674,6 +675,39 @@ static void copyJsonStringTrimmed(const JsonObject &obj, const char *key, char *
     out[n] = '\0';
 }
 
+static void copySquawkCode(const JsonObject &obj, char *out, size_t outLen) {
+    if (outLen < 5) return;
+    out[0] = '\0';
+
+    char raw[12] = {};
+    if (obj["squawk"].is<const char *>()) {
+        copyJsonStringTrimmed(obj, "squawk", raw, sizeof(raw));
+    } else if (obj["squawk"].is<int>()) {
+        snprintf(raw, sizeof(raw), "%04d", obj["squawk"].as<int>());
+    } else {
+        return;
+    }
+
+    size_t len = 0;
+    for (size_t i = 0; raw[i] != '\0' && len < 4; i++) {
+        char c = raw[i];
+        if (c < '0' || c > '7') continue;
+        out[len++] = c;
+    }
+    out[len] = '\0';
+    if (len != 4) {
+        out[0] = '\0';
+    }
+}
+
+static const char *squawkAlertLabel(const char *squawk) {
+    if (squawk == nullptr || squawk[0] == '\0') return nullptr;
+    if (strcmp(squawk, "7700") == 0) return "EMERGENCY";
+    if (strcmp(squawk, "7600") == 0) return "NO RADIO";
+    if (strcmp(squawk, "7500") == 0) return "HIJACK";
+    return nullptr;
+}
+
 static bool normalizeCallsign(const char *input, char *out, size_t outLen) {
     if (outLen == 0) return false;
     out[0] = '\0';
@@ -1013,6 +1047,7 @@ static bool fetchAdsb() {
             }
             copyJsonStringTrimmed(plane, "t", dst.type, sizeof(dst.type));
             copyJsonStringTrimmed(plane, "category", dst.category, sizeof(dst.category));
+            copySquawkCode(plane, dst.squawk, sizeof(dst.squawk));
             formatAltitude(plane, dst.alt, sizeof(dst.alt));
             formatVerticalRate(dst.verticalRateFpm, dst.vsi, sizeof(dst.vsi));
             fetchedCount++;
@@ -1224,10 +1259,17 @@ static void drawAircraftList(Gfx &g) {
         g.setTextColor(colorDim, colorBg);
         g.drawString(detail, PANEL_TEXT_X, rowY + 20);
 
-        String route = routeLabelForCallsign(g, item.callsign, textWidth);
-        if (route.length() > 0) {
-            g.setTextColor(colorRunway, colorBg);
-            g.drawString(route, PANEL_TEXT_X, rowY + 32);
+        const char *squawkAlert = squawkAlertLabel(item.squawk);
+        if (squawkAlert != nullptr) {
+            String alert = String(item.squawk) + " " + squawkAlert;
+            g.setTextColor(colorWarn, colorBg);
+            g.drawString(alert, PANEL_TEXT_X, rowY + 32);
+        } else {
+            String route = routeLabelForCallsign(g, item.callsign, textWidth);
+            if (route.length() > 0) {
+                g.setTextColor(colorRunway, colorBg);
+                g.drawString(route, PANEL_TEXT_X, rowY + 32);
+            }
         }
 
         g.drawWideLine(PANEL_X + PANEL_PAD, rowY + PANEL_ROW_H - 4, PANEL_RIGHT, rowY + PANEL_ROW_H - 4, 1.0f, colorGrid);
