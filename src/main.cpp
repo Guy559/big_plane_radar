@@ -42,7 +42,7 @@ static constexpr int PANEL_ROW_H = 54;
 static constexpr uint32_t WIFI_CONNECT_ATTEMPT_MS = 15000;
 static constexpr uint32_t WIFI_RECONNECT_INTERVAL_MS = 12000;
 static constexpr uint32_t ADSB_FETCH_INTERVAL_MS = 5000;
-static constexpr uint32_t RADAR_DRAW_INTERVAL_MS = 250;
+static constexpr uint32_t RADAR_DRAW_INTERVAL_MS = 0;
 static constexpr uint32_t AIRCRAFT_EXTRAPOLATE_MAX_MS = 30000;
 static constexpr uint32_t ROUTE_LOOKUP_INTERVAL_MS = 5000;
 static constexpr uint32_t ROUTE_LOOKUP_RETRY_MS = 600000;
@@ -1141,7 +1141,7 @@ static void drawAircraftList(Gfx &g) {
 static void drawRadar() {
     static uint32_t drawCounter = 0;
     drawCounter++;
-    bool logDraw = drawCounter <= 3 || drawCounter % 20 == 0;
+    bool logDraw = drawCounter <= 3 || drawCounter % 120 == 0;
     if (logDraw) {
         Serial.printf("[draw] #%lu begin aircraft=%u wifi=%d w=%d h=%d free_heap=%u free_psram=%u\n",
                       static_cast<unsigned long>(drawCounter),
@@ -1403,5 +1403,5 @@ void loop() {
     if (aircraftCount > 0 && now - lastDrawMs >= RADAR_DRAW_INTERVAL_MS) {
         drawRadar();
     }
-    delay(10);
+    delay(1);
 }
