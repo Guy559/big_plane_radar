@@ -45,14 +45,9 @@ appears as `/dev/ttyACM*` or `/dev/ttyUSB*`; the user may need access to the
 
 ## Symbol Legend
 
-Aircraft symbols use ADS-B `category` when it is available:
+Aircraft symbols use ADS-B `category` when it is available.
 
-| Symbol | Meaning | ADS-B categories |
-| --- | --- | --- |
-| small triangle | light/small aircraft | `A1`, `A2`, `B*` |
-| triangle | normal aircraft | `A3`, `A6`, unknown |
-| large triangle | heavy/high-vortex aircraft | `A4`, `A5` |
-| small `X` with tail | rotorcraft/helicopter; tail shows heading | `A7` |
+![Aircraft symbol legend](docs/aircraft-symbol-legend.svg)
 
 ## Repository Layout
 
