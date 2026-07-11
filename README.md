@@ -43,6 +43,17 @@ appears as `/dev/ttyACM*` or `/dev/ttyUSB*`; the user may need access to the
 - conservative RGB LCD settings for this panel: `14 MHz` PCLK and `800 * 10`
   RGB bounce buffer.
 
+## Symbol Legend
+
+Aircraft symbols use ADS-B `category` when it is available:
+
+| Symbol | Meaning | ADS-B categories |
+| --- | --- | --- |
+| small triangle | light/small aircraft | `A1`, `A2`, `B*` |
+| triangle | normal aircraft | `A3`, `A6`, unknown |
+| large triangle | heavy/high-vortex aircraft | `A4`, `A5` |
+| small `X` with tail | rotorcraft/helicopter; tail shows heading | `A7` |
+
 ## Repository Layout
 
 ```text
