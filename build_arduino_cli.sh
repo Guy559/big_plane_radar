@@ -19,11 +19,24 @@ fi
 PORT="${PORT:-/dev/cu.usbmodem5AE71132621}"
 UPLOAD="${UPLOAD:-0}"
 CLEAN="${CLEAN:-0}"
-BUILD_PATH="${BUILD_PATH:-$PROJECT_DIR/build/arduino}"
+BOARD="${BOARD:-7}"
 DEFAULT_WIFI_SSID="${DEFAULT_WIFI_SSID:-}"
 DEFAULT_WIFI_PASSWORD="${DEFAULT_WIFI_PASSWORD:-}"
 DEFAULT_LAT="${DEFAULT_LAT:-51.507400}"
 DEFAULT_LON="${DEFAULT_LON:--0.127800}"
+
+case "$BOARD" in
+  7) ;;
+  7B|7b) BOARD="7B" ;;
+  *)
+    echo "Unknown BOARD '$BOARD' (expected '7' or '7B')" >&2
+    exit 1
+    ;;
+esac
+
+# Build path is board-specific so switching BOARD always triggers a full rebuild instead of
+# reusing stale objects compiled with the other board's macros.
+BUILD_PATH="${BUILD_PATH:-$PROJECT_DIR/build/arduino-$BOARD}"
 
 FQBN="esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,DebugLevel=info,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default"
 
@@ -35,6 +48,9 @@ c_define_string() {
 }
 
 COMMON_FLAGS="-I$PROJECT_DIR -I$PROJECT_DIR/src"
+if [[ "$BOARD" == "7B" ]]; then
+  COMMON_FLAGS+=" -DBOARD_LCD_7B=1"
+fi
 CPP_FLAGS="$COMMON_FLAGS"
 CPP_FLAGS+=" -DDEFAULT_WIFI_SSID=$(c_define_string "$DEFAULT_WIFI_SSID")"
 CPP_FLAGS+=" -DDEFAULT_WIFI_PASSWORD=$(c_define_string "$DEFAULT_WIFI_PASSWORD")"

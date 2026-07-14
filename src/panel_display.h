@@ -16,8 +16,13 @@ enum class textdatum_t {
 
 namespace PanelDisplay {
 
+#if defined(BOARD_LCD_7B)
+static constexpr int WIDTH = 1024;
+static constexpr int HEIGHT = 600;
+#else
 static constexpr int WIDTH = 800;
 static constexpr int HEIGHT = 480;
+#endif
 
 class Canvas {
 public:

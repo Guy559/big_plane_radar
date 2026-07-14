@@ -41,23 +41,104 @@
         border-radius: 8px;
         background: #031108;
       }
+
+      .board-select {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .board-option {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 12px;
+        border: 1px solid #153725;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .board-option:has(input:checked) {
+        border-color: #44ff7a;
+        background: #051a0d;
+      }
+
+      .board-option input {
+        margin-top: 3px;
+        accent-color: #44ff7a;
+      }
+
+      .board-option .label {
+        font-weight: 600;
+      }
+
+      .board-option .detail {
+        color: #9fd9b2;
+        font-size: 0.92em;
+      }
+
+      .caveat {
+        margin-top: 14px;
+        font-size: 0.9em;
+        color: #9fd9b2;
+      }
     </style>
   </head>
   <body>
     <h1>Big Plane Radar</h1>
     <p>
-      Browser installer for Waveshare ESP32-S3-Touch-LCD-7. Use a Chromium-based
-      browser with Web Serial support. Set the board switch to <code>UART1</code>
-      and plug USB into the <code>UART1</code> port before connecting.
+      Browser installer for the Waveshare ESP32-S3-Touch-LCD-7 and LCD-7B. Use a
+      Chromium-based browser with Web Serial support. Set the board switch to
+      <code>UART1</code> and plug USB into the <code>UART1</code> port before
+      connecting.
     </p>
     <div class="panel">
-      <esp-web-install-button manifest="./manifest.json">
-        <button slot="activate">Install Big Plane Radar</button>
+      <div class="board-select" id="board-select">
+        <label class="board-option">
+          <input type="radio" name="board" value="7" checked>
+          <span>
+            <div class="label">ESP32-S3-Touch-LCD-7</div>
+            <div class="detail">800&times;480 panel, CH422G IO expander</div>
+          </span>
+        </label>
+        <label class="board-option">
+          <input type="radio" name="board" value="7b">
+          <span>
+            <div class="label">ESP32-S3-Touch-LCD-7B</div>
+            <div class="detail">1024&times;600 panel, Waveshare IO Extension chip</div>
+          </span>
+        </label>
+      </div>
+      <esp-web-install-button id="install-button" manifest="./manifest-7.json">
+        <button slot="activate" id="install-button-label">Install Big Plane Radar (LCD-7)</button>
         <span slot="unsupported">
           Web Serial is not available. Use Chrome, Edge, or another Chromium-based
           desktop browser over HTTPS.
         </span>
       </esp-web-install-button>
+      <p class="caveat">
+        Select the board you actually have before installing &mdash; the two images
+        aren't interchangeable (different resolution and IO expander driver). Flashing
+        the wrong one won't damage the hardware, but the display/touch won't work
+        correctly until you flash the matching image.
+      </p>
     </div>
+    <script>
+      const MANIFESTS = {
+        "7": { path: "./manifest-7.json", label: "Install Big Plane Radar (LCD-7)" },
+        "7b": { path: "./manifest-7b.json", label: "Install Big Plane Radar (LCD-7B)" },
+      };
+
+      const installButton = document.getElementById("install-button");
+      const installLabel = document.getElementById("install-button-label");
+
+      document.getElementById("board-select").addEventListener("change", (event) => {
+        const choice = MANIFESTS[event.target.value];
+        if (!choice) return;
+        installButton.setAttribute("manifest", choice.path);
+        installLabel.textContent = choice.label;
+      });
+    </script>
   </body>
 </html>

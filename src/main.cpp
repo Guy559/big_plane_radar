@@ -28,12 +28,15 @@
 #define DEFAULT_LON -0.127800
 #endif
 
-static constexpr int SCREEN_W = 800;
-static constexpr int SCREEN_H = 480;
-static constexpr int RADAR_CX = 260;
+static constexpr int SCREEN_W = PanelDisplay::WIDTH;
+static constexpr int SCREEN_H = PanelDisplay::HEIGHT;
 static constexpr int RADAR_CY = SCREEN_H / 2;
-static constexpr int RADAR_RADIUS = 218;
-static constexpr int PANEL_X = 520;
+// Derived from the original 800x480 layout (radius = half-height - 22px margin; radar circle
+// and side panel each get the same 42px gutter) so both board resolutions lay out consistently.
+static constexpr int LAYOUT_GUTTER = 42;
+static constexpr int RADAR_RADIUS = RADAR_CY - 22;
+static constexpr int RADAR_CX = RADAR_RADIUS + LAYOUT_GUTTER;
+static constexpr int PANEL_X = RADAR_CX + RADAR_RADIUS + LAYOUT_GUTTER;
 static constexpr int PANEL_PAD = 10;
 static constexpr int PANEL_TEXT_X = PANEL_X + 42;
 static constexpr int PANEL_RIGHT = SCREEN_W - 10;

@@ -19,9 +19,12 @@ https://makerworld.com/ru/models/3034679-stand-for-esp32-s3-touch-lcd-7-for-plan
 
 ## Hardware
 
-- Waveshare ESP32-S3-Touch-LCD-7, 800x480 RGB LCD
+- Waveshare ESP32-S3-Touch-LCD-7 (800x480) or ESP32-S3-Touch-LCD-7B (1024x600) RGB LCD
 - USB data cable connected to the board's `UART1` USB port
 - Board switch set to `UART1`
+
+The two boards share the same RGB/touch pinout but differ in panel resolution/timing and use
+different (incompatible) IO expander chips; see `BOARD` under Build.
 
 On macOS, install the USB serial driver if the board does not appear as
 `/dev/cu.usbmodem*` or `/dev/cu.wchusbserial*`. On Linux, the device usually
@@ -40,8 +43,12 @@ appears as `/dev/ttyACM*` or `/dev/ttyUSB*`; the user may need access to the
 - touch controls: short tap cycles range, long press starts the setup portal;
 - boot setup window: hold the screen during startup to force the setup portal;
 - screenshot endpoint: `/screenshot` and `/screenshot.bmp`;
-- conservative RGB LCD settings for this panel: `14 MHz` PCLK and `800 * 10`
-  RGB bounce buffer.
+- conservative RGB LCD settings per panel: `14 MHz` PCLK on both the LCD-7 and LCD-7B.
+  Waveshare's own reference firmware runs the 7B at `30 MHz`, but that assumes 120MHz
+  PSRAM/flash; this Arduino core only supports 80MHz on the S3, and 30MHz (and even 20MHz)
+  caused visible screen drift/tearing on real hardware at that speed, so the 7B matches the
+  LCD-7's proven-stable `14 MHz`. The 7B also uses a larger bounce buffer
+  (`panel_width * 20` vs `panel_width * 10`) for extra DMA cushion.
 
 ## Symbol Legend
 
@@ -94,6 +101,17 @@ arduino-cli core install esp32:esp32
 ```sh
 bash build_arduino_cli.sh
 ```
+
+This builds for the original ESP32-S3-Touch-LCD-7 (800x480) by default. To build for the
+ESP32-S3-Touch-LCD-7B (1024x600) instead:
+
+```sh
+BOARD=7B bash build_arduino_cli.sh
+```
+
+`BOARD` selects the resolution, RGB timing, and IO expander driver in
+`esp_panel_board_custom_conf.h`. Each board builds to its own path under `build/` so switching
+`BOARD` never reuses stale objects from the other board.
 
 By default, no Wi-Fi credentials are compiled into the firmware. The default
 radar center is London:
@@ -155,10 +173,11 @@ file manually:
 3. Click `Connect` and select the ESP32-S3 serial port.
 4. Use one file row:
    - offset: `0x0`
-   - file: `releases/big_plane_radar.ino.merged.bin`
+   - file: `releases/big_plane_radar.ino.merged.bin` (LCD-7) or
+     `releases/big_plane_radar-7b.ino.merged.bin` (LCD-7B)
 5. Click `Erase`, then `Program`.
 
-Use the merged binary for browser flashing.
+Use the merged binary matching your board for browser flashing.
 
 ### Option B: ESP Web Tools Page
 
@@ -175,13 +194,15 @@ To use it:
 https://<your-github-user>.github.io/big_plane_radar/web-installer/
 ```
 
-3. Press `Install Big Plane Radar` and select the ESP32-S3 serial port.
+3. Select your board (LCD-7 or LCD-7B), then press the install button and
+   select the ESP32-S3 serial port.
 
 ESP Web Tools requires HTTPS and the firmware file must be fetchable by the
-browser. The included manifest points to:
+browser. The board selector switches between two manifests:
 
 ```text
-../releases/big_plane_radar.ino.merged.bin
+web-installer/manifest-7.json  -> ../releases/big_plane_radar.ino.merged.bin
+web-installer/manifest-7b.json -> ../releases/big_plane_radar-7b.ino.merged.bin
 ```
 
 ## First Boot

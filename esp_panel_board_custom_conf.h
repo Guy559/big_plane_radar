@@ -30,15 +30,21 @@
 ///////////////////////// Please update the following macros to configure general parameters ///////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /**
- * @brief Board name (format: "Manufacturer:Model")
+ * @brief Board name (format: "Manufacturer:Model") and panel resolution
+ *
+ * Build with `BOARD=7B` (see build_arduino_cli.sh) to target the ESP32-S3-Touch-LCD-7B instead
+ * of the original ESP32-S3-Touch-LCD-7. The two share RGB/touch pinout, but differ in panel
+ * resolution/timing and use a different (incompatible) IO expander chip.
  */
-#define ESP_PANEL_BOARD_NAME                "Waveshare:ESP32-S3-Touch-LCD-7"
-
-/**
- * @brief Panel resolution configuration in pixels
- */
-#define ESP_PANEL_BOARD_WIDTH               (800)   // Panel width (horizontal, in pixels)
-#define ESP_PANEL_BOARD_HEIGHT              (480)   // Panel height (vertical, in pixels)
+#if defined(BOARD_LCD_7B)
+    #define ESP_PANEL_BOARD_NAME                "Waveshare:ESP32-S3-Touch-LCD-7B"
+    #define ESP_PANEL_BOARD_WIDTH               (1024)  // Panel width (horizontal, in pixels)
+    #define ESP_PANEL_BOARD_HEIGHT              (600)   // Panel height (vertical, in pixels)
+#else
+    #define ESP_PANEL_BOARD_NAME                "Waveshare:ESP32-S3-Touch-LCD-7"
+    #define ESP_PANEL_BOARD_WIDTH               (800)   // Panel width (horizontal, in pixels)
+    #define ESP_PANEL_BOARD_HEIGHT              (480)   // Panel height (vertical, in pixels)
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////// Please update the following macros to configure the LCD panel /////////////////////////////
@@ -81,14 +87,30 @@
     #define ESP_PANEL_BOARD_LCD_RGB_USE_CONTROL_PANEL       (0) // 0/1. Typically set to 1
 
     /* For refresh panel (RGB) */
+    // To increase the upper limit of the PCLK, see: https://docs.espressif.com/projects/esp-faq/en/latest/software-framework/peripherals/lcd.html#how-can-i-increase-the-upper-limit-of-pclk-settings-on-esp32-s3-while-ensuring-normal-rgb-screen-display
+#if defined(BOARD_LCD_7B)
+    // Waveshare's own 30MHz reference config assumes 120MHz PSRAM/flash (see their wiki's
+    // menuconfig notes). This Arduino core only supports 80MHz PSRAM/flash for the S3, which
+    // can't sustain the DMA bandwidth 30MHz needs at 1024x600 and causes visible screen drift
+    // (image shifting/tearing). 20MHz still showed residual drift on hardware, so this drops
+    // further, to sit safely under the proven-stable 800x480@14MHz config's bandwidth despite
+    // 7B's larger frame.
     #define ESP_PANEL_BOARD_LCD_RGB_CLK_HZ          (14 * 1000 * 1000)
-                                                            // To increase the upper limit of the PCLK, see: https://docs.espressif.com/projects/esp-faq/en/latest/software-framework/peripherals/lcd.html#how-can-i-increase-the-upper-limit-of-pclk-settings-on-esp32-s3-while-ensuring-normal-rgb-screen-display
+    #define ESP_PANEL_BOARD_LCD_RGB_HPW             (162)
+    #define ESP_PANEL_BOARD_LCD_RGB_HBP             (152)
+    #define ESP_PANEL_BOARD_LCD_RGB_HFP             (48)
+    #define ESP_PANEL_BOARD_LCD_RGB_VPW             (45)
+    #define ESP_PANEL_BOARD_LCD_RGB_VBP             (13)
+    #define ESP_PANEL_BOARD_LCD_RGB_VFP             (3)
+#else
+    #define ESP_PANEL_BOARD_LCD_RGB_CLK_HZ          (14 * 1000 * 1000)
     #define ESP_PANEL_BOARD_LCD_RGB_HPW             (4)
     #define ESP_PANEL_BOARD_LCD_RGB_HBP             (8)
     #define ESP_PANEL_BOARD_LCD_RGB_HFP             (8)
     #define ESP_PANEL_BOARD_LCD_RGB_VPW             (4)
     #define ESP_PANEL_BOARD_LCD_RGB_VBP             (8)
     #define ESP_PANEL_BOARD_LCD_RGB_VFP             (8)
+#endif
     #define ESP_PANEL_BOARD_LCD_RGB_PCLK_ACTIVE_NEG (1)     // 0: rising edge, 1: falling edge. Typically set to 0
                                                                                         // The following sheet shows the valid combinations of
                                                                                         // data width and pixel bits:
@@ -97,7 +119,15 @@
     #define ESP_PANEL_BOARD_LCD_RGB_PIXEL_BITS      (ESP_PANEL_LCD_COLOR_BITS_RGB565)   // | ESP_PANEL_LCD_COLOR_BITS_RGB565 | ESP_PANEL_LCD_COLOR_BITS_RGB888 |
                                                                                         // ┗---------------------------------┻---------------------------------┛
                                                             // To understand color format of RGB LCD, see: https://docs.espressif.com/projects/esp-iot-solution/en/latest/display/lcd/rgb_lcd.html#color-formats
+#if defined(BOARD_LCD_7B)
+    #define ESP_PANEL_BOARD_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_BOARD_WIDTH * 20)
+                                                            // Wider cushion than the `* 10` default: the 7B's higher
+                                                            // resolution/PCLK leaves less bandwidth margin (see PCLK
+                                                            // comment above), so give the DMA more slack against
+                                                            // transient stalls.
+#else
     #define ESP_PANEL_BOARD_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_BOARD_WIDTH * 10)
+#endif
                                                             // Bounce buffer size in bytes. It is used to avoid screen drift
                                                             // for ESP32-S3. Typically set to `ESP_PANEL_BOARD_WIDTH * 10`
                                                             // The size should satisfy `size * N = LCD_width * LCD_height`,
@@ -301,8 +331,15 @@
 #if ESP_PANEL_BOARD_USE_EXPANDER
 /**
  * @brief IO expander chip selection
+ *
+ * The 7B uses a different (incompatible) expander chip than the original 7, see
+ * `esp_expander::WS_IOExtension` in the vendored ESP32_IO_Expander library.
  */
-#define ESP_PANEL_BOARD_EXPANDER_CHIP           CH422G
+#if defined(BOARD_LCD_7B)
+    #define ESP_PANEL_BOARD_EXPANDER_CHIP        WS_IOExtension
+#else
+    #define ESP_PANEL_BOARD_EXPANDER_CHIP        CH422G
+#endif
 
 /**
  * @brief IO expander I2C bus parameters configuration
@@ -327,9 +364,13 @@
 #define ESP_PANEL_BOARD_EXPANDER_I2C_IO_SDA         (8)
 #endif // ESP_PANEL_BOARD_EXPANDER_SKIP_INIT_HOST
 /* For device */
+#if defined(BOARD_LCD_7B)
+#define ESP_PANEL_BOARD_EXPANDER_I2C_ADDRESS        (0x24)  // Waveshare IO Extension chip, fixed address
+#else
 #define ESP_PANEL_BOARD_EXPANDER_I2C_ADDRESS        (0x20)  // The actual I2C address. Even for the same model of IC,
                                                             // the I2C address may be different, and confirmation based on
                                                             // the actual hardware connection is required
+#endif
 #endif // ESP_PANEL_BOARD_USE_EXPANDER
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -344,8 +385,8 @@
 #define ESP_PANEL_BOARD_EXPANDER_POST_BEGIN_FUNCTION(p) \
     {  \
         auto board = static_cast<Board *>(p);  \
-        auto expander = static_cast<esp_expander::CH422G*>(board->getIO_Expander()->getBase()); \
-        expander->enableAllIO_Output(); \
+        auto expander = board->getIO_Expander()->getBase(); \
+        expander->multiPinMode(0xFF, OUTPUT); \
         return true;    \
     }
 
