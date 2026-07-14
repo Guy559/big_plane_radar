@@ -55,6 +55,9 @@ static constexpr uint32_t BOOT_SETUP_WINDOW_MS = 4000;
 static constexpr uint32_t TOUCH_LONG_PRESS_MS = 1200;
 static constexpr uint32_t TOUCH_TAP_MIN_MS = 50;
 static constexpr uint32_t CONFIG_HOLD_NOTICE_MS = 900;
+// Touch readings can blip "up" for a poll or two from noise even while a finger is still
+// resting, so exit-arming requires this much continuous no-contact time, not just one reading.
+static constexpr uint32_t PORTAL_EXIT_ARM_DELAY_MS = 300;
 static constexpr float KM_PER_NM = 1.852f;
 static constexpr float KM_PER_DEG = 111.0f;
 static constexpr size_t MAX_AIRCRAFT = 64;
@@ -136,6 +139,45 @@ static uint32_t touchDownMs = 0;
 static bool longPressHandled = false;
 static bool configNoticeShown = false;
 
+// Tappable regions are rebuilt every frame by the draw functions, then hit-tested by
+// handleTouch(). This replaces whole-screen tap/long-press gestures with specific hitboxes.
+enum class TapAction : uint8_t {
+    None,
+    RangeBadge,
+    RangeOption,
+    SetupIcon,
+};
+
+struct TapRegion {
+    int x0, y0, x1, y1;
+    TapAction action;
+    int param;
+};
+
+static constexpr int MAX_TAP_REGIONS = 16;
+static TapRegion tapRegions[MAX_TAP_REGIONS];
+static int tapRegionCount = 0;
+static bool rangeDropdownOpen = false;
+static TapAction activeDownAction = TapAction::None;
+static int activeDownParam = 0;
+
+static void clearTapRegions() {
+    tapRegionCount = 0;
+}
+
+static void addTapRegion(int x0, int y0, int x1, int y1, TapAction action, int param = 0) {
+    if (tapRegionCount >= MAX_TAP_REGIONS) return;
+    tapRegions[tapRegionCount++] = {x0, y0, x1, y1, action, param};
+}
+
+static const TapRegion *hitTestTapRegion(int x, int y) {
+    for (int i = tapRegionCount - 1; i >= 0; i--) {
+        const TapRegion &r = tapRegions[i];
+        if (x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1) return &r;
+    }
+    return nullptr;
+}
+
 static void lockState() {
     if (stateMutex != nullptr) {
         xSemaphoreTake(stateMutex, portMAX_DELAY);
@@ -169,6 +211,7 @@ static const RangePreset ranges[] = {
     {13.3f, "10km", "6mi"},
     {20.0f, "15km", "9mi"},
     {33.3f, "25km", "16mi"},
+    {107.3f, "80km", "50mi"},
 };
 static constexpr size_t RANGE_COUNT = sizeof(ranges) / sizeof(ranges[0]);
 static size_t rangeIndex = 1;
@@ -623,7 +666,16 @@ static void startWebServer() {
     webServerStarted = true;
 }
 
+// Guards against the same finger that long-pressed the setup icon (still down when the setup
+// screen first appears) from instantly exiting it again; requires the touch reading to go, and
+// stay, quiet for PORTAL_EXIT_ARM_DELAY_MS (not just a single "up" poll, which can blip from
+// noise even while a finger is still resting) before a fresh tap is allowed to exit.
+static bool portalExitArmed = false;
+static bool portalTouchWasDown = false;
+static uint32_t portalUpSinceMs = 0;
+
 static void startPortal() {
+    rangeDropdownOpen = false;
     lockState();
     bool alreadyActive = portalActive;
     if (!alreadyActive) {
@@ -633,14 +685,46 @@ static void startPortal() {
     if (alreadyActive) {
         return;
     }
+    portalExitArmed = false;
+    portalTouchWasDown = true;
+    portalUpSinceMs = millis();
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("PlaneRadar-Setup");
     startWebServer();
     if (!mdnsStarted && MDNS.begin("plane-radar")) {
         mdnsStarted = true;
     }
-    drawStatusScreen("PLANE RADAR SETUP", "Connect to Wi-Fi AP: PlaneRadar-Setup\nOpen http://192.168.4.1\nSet Wi-Fi and radar location.");
+    drawStatusScreen("PLANE RADAR SETUP", "Connect to Wi-Fi AP: PlaneRadar-Setup\nOpen http://192.168.4.1\nSet Wi-Fi and radar location.\nTap anywhere to cancel.");
     setStatus("SETUP PORTAL");
+}
+
+static void exitPortal() {
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    lockState();
+    portalActive = false;
+    networkDataDirty = true;
+    unlockState();
+}
+
+static void handlePortalTouch() {
+    uint16_t x = 0;
+    uint16_t y = 0;
+    bool down = screen.readTouch(&x, &y);
+    uint32_t now = millis();
+    if (down) {
+        if (portalExitArmed && !portalTouchWasDown) {
+            exitPortal();
+        }
+    } else {
+        if (portalTouchWasDown) {
+            portalUpSinceMs = now;
+        }
+        if (!portalExitArmed && now - portalUpSinceMs >= PORTAL_EXIT_ARM_DELAY_MS) {
+            portalExitArmed = true;
+        }
+    }
+    portalTouchWasDown = down;
 }
 
 static bool connectWifiOnce(uint32_t timeoutMs) {
@@ -1345,6 +1429,20 @@ static void drawAircraftSymbol(Gfx &g, const Aircraft &item, int cx, int cy) {
 }
 
 template <typename Gfx>
+static void drawSetupIcon(Gfx &g) {
+    constexpr int left = 14;
+    constexpr int right = 46;
+    constexpr int centerY = 26;
+    constexpr int spacing = 10;
+    for (int i = -1; i <= 1; i++) {
+        int y = centerY + i * spacing;
+        g.drawWideLine(left, y, right, y, 3.0f, colorGrid);
+    }
+    // Touch target is deliberately larger than the drawn icon for comfortable tapping.
+    addTapRegion(0, 0, 60, 56, TapAction::SetupIcon);
+}
+
+template <typename Gfx>
 static void drawRunways(Gfx &g) {
     if (!config.showRunways) return;
     g.setTextSize(1);
@@ -1404,9 +1502,32 @@ static void drawAircraftList(
     g.setTextDatum(textdatum_t::top_right);
     g.setTextSize(2);
     g.setTextColor(colorDim, colorBg);
-    char rangeTitle[24];
-    snprintf(rangeTitle, sizeof(rangeTitle), "RANGE %s", rangeLabel());
+    char rangeTitle[28];
+    // Trailing "v" reuses the font's dropdown-chevron glyph to hint this badge is tappable.
+    snprintf(rangeTitle, sizeof(rangeTitle), "RANGE %s v", rangeLabel());
     g.drawString(rangeTitle, PANEL_RIGHT, 10);
+    addTapRegion(PANEL_X, 0, SCREEN_W, 40, TapAction::RangeBadge);
+
+    if (rangeDropdownOpen) {
+        constexpr int optionRowH = 34;
+        int top = 40;
+        int bottom = top + static_cast<int>(RANGE_COUNT) * optionRowH;
+        g.fillRect(PANEL_X, top, SCREEN_W - PANEL_X, bottom - top, colorBg);
+        g.drawWideLine(PANEL_X, top, PANEL_RIGHT, top, 1.0f, colorGrid);
+        for (size_t i = 0; i < RANGE_COUNT; i++) {
+            int rowY = top + static_cast<int>(i) * optionRowH;
+            bool selected = (i == rangeIndex);
+            g.setTextDatum(textdatum_t::top_left);
+            g.setTextSize(2);
+            g.setTextColor(selected ? colorText : colorDim, colorBg);
+            const char *label = config.miles ? ranges[i].miLabel : ranges[i].kmLabel;
+            g.drawString(label, PANEL_TEXT_X, rowY + 6);
+            g.drawWideLine(
+                PANEL_X + PANEL_PAD, rowY + optionRowH - 2, PANEL_RIGHT, rowY + optionRowH - 2, 1.0f, colorGrid);
+            addTapRegion(PANEL_X, rowY, SCREEN_W, rowY + optionRowH, TapAction::RangeOption, static_cast<int>(i));
+        }
+        return;
+    }
 
     int textWidth = PANEL_RIGHT - PANEL_TEXT_X;
     int maxRows = (SCREEN_H - PANEL_LIST_TOP - 4) / PANEL_ROW_H;
@@ -1494,10 +1615,13 @@ static void drawRadar() {
     auto &g = screen;
     g.startWrite();
     g.fillScreen(colorBg);
+    clearTapRegions();
     prepareAircraftGeometry(renderAircraft, renderCount);
     int cx = RADAR_CX;
     int cy = RADAR_CY;
     int radius = RADAR_RADIUS;
+
+    drawSetupIcon(g);
 
     for (int i = 1; i <= 4; i++) {
         int r = (radius * i) / 4;
@@ -1593,29 +1717,54 @@ static void handleTouch() {
     uint16_t y = 0;
     bool down = screen.readTouch(&x, &y);
     uint32_t now = millis();
+
     if (down && !touchWasDown) {
         touchDownMs = now;
         longPressHandled = false;
+        configNoticeShown = false;
+        const TapRegion *hit = hitTestTapRegion(x, y);
+        activeDownAction = hit != nullptr ? hit->action : TapAction::None;
+        activeDownParam = hit != nullptr ? hit->param : 0;
     }
-    if (down && !longPressHandled && now - touchDownMs >= TOUCH_LONG_PRESS_MS) {
-        longPressHandled = true;
-        startPortal();
-    }
-    if (down && !longPressHandled && !configNoticeShown && now - touchDownMs >= CONFIG_HOLD_NOTICE_MS) {
-        configNoticeShown = true;
-        setStatus("HOLD FOR SETUP");
-    }
-    if (!down && touchWasDown) {
-        uint32_t held = now - touchDownMs;
-        if (!longPressHandled && held >= TOUCH_TAP_MIN_MS && held < TOUCH_LONG_PRESS_MS) {
-            lockState();
-            rangeIndex = (rangeIndex + 1) % RANGE_COUNT;
-            forceAdsbFetch = true;
-            networkDataDirty = true;
-            unlockState();
-            saveRange();
+
+    // Long-press (with a "hold for setup" warning first) only applies to the setup icon.
+    if (down && activeDownAction == TapAction::SetupIcon && !longPressHandled) {
+        if (now - touchDownMs >= TOUCH_LONG_PRESS_MS) {
+            longPressHandled = true;
+            startPortal();
+        } else if (!configNoticeShown && now - touchDownMs >= CONFIG_HOLD_NOTICE_MS) {
+            configNoticeShown = true;
+            setStatus("HOLD FOR SETUP");
         }
     }
+
+    if (!down && touchWasDown) {
+        uint32_t held = now - touchDownMs;
+        if (!longPressHandled && held >= TOUCH_TAP_MIN_MS) {
+            switch (activeDownAction) {
+            case TapAction::RangeBadge:
+                rangeDropdownOpen = !rangeDropdownOpen;
+                break;
+            case TapAction::RangeOption:
+                lockState();
+                rangeIndex = static_cast<size_t>(activeDownParam);
+                forceAdsbFetch = true;
+                networkDataDirty = true;
+                unlockState();
+                saveRange();
+                rangeDropdownOpen = false;
+                break;
+            case TapAction::SetupIcon:
+                // Only a long-press triggers setup; a short tap on the icon does nothing.
+                break;
+            case TapAction::None:
+                // Tapping outside any known control just dismisses an open dropdown.
+                rangeDropdownOpen = false;
+                break;
+            }
+        }
+    }
+
     if (!down) {
         configNoticeShown = false;
     }
@@ -1796,11 +1945,18 @@ void setup() {
 
 void loop() {
     server.handleClient();
-    handleTouch();
-
-    uint32_t now = millis();
-    if (shouldDrawRadarFrame(now)) {
-        drawRadar();
+    if (portalActive) {
+        handlePortalTouch();
+    } else {
+        handleTouch();
+    }
+    // Re-check portalActive: handleTouch() may have just triggered startPortal() and drawn the
+    // setup screen, and that shouldn't be immediately overwritten within the same iteration.
+    if (!portalActive) {
+        uint32_t now = millis();
+        if (shouldDrawRadarFrame(now)) {
+            drawRadar();
+        }
     }
     delay(1);
 }
